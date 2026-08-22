@@ -1,7 +1,8 @@
 import os
 import re
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import uvicorn
+from fastapi import FastAPI
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
@@ -64,21 +65,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Edit the processing message to show it's done
         await processing_msg.edit_text("✅ Processing complete!")
 
-class PingHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
-        self.wfile.write(b"Bot is alive!")
+app = FastAPI()
 
-    def do_HEAD(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/plain')
-        self.end_headers()
+@app.get("/")
+@app.head("/")
+def health_check():
+    return {"status": "alive"}
 
 def keep_alive():
-    server = HTTPServer(('0.0.0.0', 8080), PingHandler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    def run():
+        uvicorn.run(app, host="0.0.0.0", port=8080, log_level="warning")
+    threading.Thread(target=run, daemon=True).start()
 
 def main() -> None:
     """Start the bot."""
