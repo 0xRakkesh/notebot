@@ -29,7 +29,16 @@ def fetch_youtube_subtitles(video_url: str) -> str:
         video_id = match.group(1) if match else video_url
         
         api = YouTubeTranscriptApi()
-        transcript = api.fetch(video_id)
+        transcript_list = api.list(video_id)
+        
+        try:
+            # Try to find an English transcript first
+            transcript_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'en-CA', 'en-AU', 'en-IN'])
+        except Exception:
+            # Fallback to the first available transcript (any language)
+            transcript_obj = list(transcript_list)[0]
+            
+        transcript = transcript_obj.fetch()
         
         if not transcript:
             return "Error: No transcript found for this video."
@@ -99,6 +108,7 @@ RULES:
 3. HIGHLIGHTING (STRICT HTML): You MUST use `<b>` tags for bold. NEVER use Markdown `**`. Example: <b>IMPORTANT</b>, not **IMPORTANT**.
 4. BALANCE: Capture critical theory (like DBMS normalization, OS deadlocks, ML math) just as heavily as code.
 5. REVISION: End with a <b>REVISION:</b> section containing 3-5 crucial technical takeaways (separated by newlines, NO bullets).
+6. ERRORS: If the fetch_youtube_subtitles tool returns an Error string (e.g. "Error: The video is longer than 30 minutes" or "Error: No transcript found"), YOU MUST explicitly tell the user the exact reason it failed, and then optionally ask for manual text. Do NOT just say "I'm unable to retrieve the transcript" without giving the specific reason.
 """
 
 agent = create_agent(
