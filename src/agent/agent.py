@@ -87,7 +87,14 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             if not formatted:
                 return "Error: Transcript was empty."
 
-            return "\n".join(formatted)
+            transcript_text = "\n".join(formatted)
+            
+            # Truncate to prevent Groq 8000 TPM limit errors (approx 5000 tokens)
+            MAX_CHARS = 20000 
+            if len(transcript_text) > MAX_CHARS:
+                transcript_text = transcript_text[:MAX_CHARS] + "\n\n...[Transcript truncated due to length limits]..."
+                
+            return transcript_text
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
 
