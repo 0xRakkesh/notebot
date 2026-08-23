@@ -52,78 +52,80 @@ def search_tavily_diagram(query: str) -> str:
     except Exception as e:
         return ""
 
-def fetch_youtube_subtitles_raw(youtube_url: str) -> str:
+def fetch_youtube_subtitles_raw(video_url: str) -> str:
+    """Original reliable fetcher using yt-dlp to extract URL, then requests.get"""
     try:
-        from youtube_transcript_api import YouTubeTranscriptApi
         import yt_dlp
-        
-        # 1. First use yt-dlp simply to get the duration limit
-        # This is very fast and doesn't usually 429 if we don't scrape the subtitle endpoints
-        proxy = os.getenv("YOUTUBE_PROXY")
+        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", video_url)
+        video_id = match.group(1) if match else video_url
+        url = f"https://www.youtube.com/watch?v={video_id}"
+
         ydl_opts = {
             'skip_download': True,
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['en'],
             'quiet': True,
             'no_warnings': True,
-            'extract_flat': True
+            'ignore_no_formats_error': True,
+            'format': 'worst*',
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
         }
+        
+        proxy = os.getenv("YOUTUBE_PROXY")
         if proxy:
             ydl_opts['proxy'] = proxy
-            
-        video_id = None
-        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", youtube_url)
-        if match:
-            video_id = match.group(1)
-        else:
-            return "Error: Could not extract YouTube video ID."
-            
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
+            info = ydl.extract_info(url, download=False)
             duration = info.get('duration', 0)
             if duration > 3600:
                 return f"Error: The video is longer than 1 hour ({int(duration/60)} mins). Rejecting the request."
+
+            subs = info.get('subtitles', {})
+            auto_subs = info.get('automatic_captions', {})
+
+            sub_url = None
+            for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
+                for source in [subs, auto_subs]:
+                    if lang in source:
+                        for fmt in source[lang]:
+                            if fmt.get('ext') == 'json3':
+                                sub_url = fmt['url']
+                                break
+                        if sub_url:
+                            break
+                if sub_url:
+                    break
+
+            if not sub_url:
+                return "Error: No English transcript found for this video."
+
+            resp = requests.get(sub_url)
+            caption_json = resp.json()
+
+            formatted = []
+            for event in caption_json.get('events', []):
+                start_ms = event.get('tStartMs', 0)
+                segs = event.get('segs', [])
+                if not segs:
+                    continue
+                text = ''.join(s.get('utf8', '') for s in segs).strip()
+                if not text:
+                    continue
+                mins = int((start_ms / 1000) // 60)
+                secs = int((start_ms / 1000) % 60)
+                formatted.append(f"[{mins:02d}:{secs:02d}] {text}")
+
+            if not formatted:
+                return "Error: Transcript was empty."
+
+            transcript_text = "\n".join(formatted)
+            MAX_CHARS = 50000 
+            if len(transcript_text) > MAX_CHARS:
+                transcript_text = transcript_text[:MAX_CHARS] + "\n\n...[Transcript truncated due to length limits]..."
                 
-        # 2. Use youtube-transcript-api for actual fetching
-        proxies = None
-        if proxy:
-            proxies = {"http": proxy, "https": proxy}
-            
-        api = YouTubeTranscriptApi(proxy_config=None)
-        if proxy:
-            from youtube_transcript_api.proxies import GenericProxyConfig
-            api = YouTubeTranscriptApi(proxy_config=GenericProxyConfig(http_url=proxy, https_url=proxy))
-            
-        transcript_list = api.list(video_id)
-        transcript = None
-        
-        try:
-            transcript = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'en-IN'])
-        except Exception:
-            # Fallback to the first available transcript (e.g. Hindi, Spanish, etc.)
-            for t in transcript_list:
-                transcript = t
-                break
-                
-        if not transcript:
-            return "Error: No English or fallback transcript found for this video."
-            
-        transcript_data = transcript.fetch()
-        
-        formatted = []
-        for segment in transcript_data:
-            start_ms = segment['start'] * 1000
-            mins = int((start_ms / 1000) // 60)
-            secs = int((start_ms / 1000) % 60)
-            formatted.append(f"[{mins:02d}:{secs:02d}] {segment['text']}")
-            
-        if not formatted:
-            return "Error: Transcript was empty."
-            
-        transcript_text = "\n".join(formatted)
-        MAX_CHARS = 50000 
-        if len(transcript_text) > MAX_CHARS:
-            transcript_text = transcript_text[:MAX_CHARS] + "\n\n...[Transcript truncated due to length limits]..."
-            
-        return transcript_text
+            return transcript_text
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
 
@@ -133,7 +135,7 @@ def fetch_youtube_subtitles_raw(youtube_url: str) -> str:
 def node_fetch_transcript(state: AgentState) -> dict:
     print("-> Fetching transcript...")
     transcript = fetch_youtube_subtitles_raw(state["youtube_url"])
-    if transcript.startswith("Error"):
+    if transcript.startswith("Error:"):
         return {"error": transcript}
     return {"transcript": transcript, "error": ""}
 
