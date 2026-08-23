@@ -135,7 +135,7 @@ def fetch_youtube_subtitles_raw(video_url: str) -> str:
 def node_fetch_transcript(state: AgentState) -> dict:
     print("-> Fetching transcript...")
     transcript = fetch_youtube_subtitles_raw(state["youtube_url"])
-    if transcript.startswith("Error:"):
+    if transcript.startswith("Error"):
         return {"error": transcript}
     return {"transcript": transcript, "error": ""}
 
