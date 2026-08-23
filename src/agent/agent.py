@@ -41,6 +41,8 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             'subtitleslangs': ['en'],
             'quiet': True,
             'no_warnings': True,
+            'ignore_no_formats_error': True,
+            'format': 'worst*',
             'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
         }
         
