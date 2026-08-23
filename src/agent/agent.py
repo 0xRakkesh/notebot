@@ -5,7 +5,7 @@ import io
 import requests
 from tavily import TavilyClient
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+# sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain.tools import tool
@@ -122,7 +122,7 @@ RULES:
    <b>Example:</b> A minimal, practical real-world use case.
    
    <b>Architecture & Flow:</b>
-   [If applicable, use the search_concept_diagram tool to find a diagram for the concept (e.g., "OS Deadlock RAG diagram"). Output EXACTLY like this: [IMAGE]url_from_tool[/IMAGE]]
+   [You MUST call the `search_concept_diagram` tool with a specific search query (e.g., "OS Deadlock RAG diagram"). Output the result EXACTLY like this: [IMAGE]url_from_tool[/IMAGE]. Do not skip this step.]
    
    <b>Code / Math:</b>
    <pre>
