@@ -15,10 +15,9 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
     welcome_message = (
-        "Welcome to NoteBot! 🎓\n\n"
-        "Send me a YouTube link (e.g., https://youtu.be/...) and I will generate ultra-concise, "
-        "handwritten-style notes for you.\n\n"
-        "Maximum video length is 30 minutes."
+        "Hiiiii! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧ I'm Marin Kitagawa, your absolute favorite CS nerd and parallel-universe class topper!\n\n"
+        "Just drop a YouTube link (like https://youtu.be/...) here, and I'll whip up the most *perfect*, ultra-dense, completely awesome cheat sheet notes for you!\n\n"
+        "Just a heads up though, try to keep the videos under 30 minutes so we don't totally crash the system, okay? Let's get studying!"
     )
     await update.message.reply_text(welcome_message)
 
