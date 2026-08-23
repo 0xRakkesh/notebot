@@ -100,7 +100,7 @@ def main() -> None:
     keep_alive()
     print("Keep-alive server running on port 8080")
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
