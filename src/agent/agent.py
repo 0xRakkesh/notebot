@@ -89,8 +89,8 @@ def fetch_youtube_subtitles_raw(youtube_url: str) -> str:
             
         api = YouTubeTranscriptApi(proxy_config=None)
         if proxy:
-            from youtube_transcript_api.proxies import ProxyConfig
-            api = YouTubeTranscriptApi(proxy_config=ProxyConfig(http=proxy, https=proxy))
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            api = YouTubeTranscriptApi(proxy_config=GenericProxyConfig(http_url=proxy, https_url=proxy))
             
         transcript_list = api.list(video_id)
         transcript = None
