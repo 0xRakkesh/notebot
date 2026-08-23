@@ -2,7 +2,7 @@ import os
 import re
 import sys
 import io
-import json
+import requests
 from tavily import TavilyClient
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
@@ -18,21 +18,13 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
 @tool
 def fetch_youtube_subtitles(video_url: str) -> str:
-    """
-    Fetches the subtitles/transcript for a given YouTube video URL.
-    Returns the transcript formatted for AI notes, or an error if the video is longer than 30 minutes.
-    """
+    """Fetches the subtitles/transcript for a given YouTube video URL."""
     try:
         import yt_dlp
-        
-        cookies_file = None
-        cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
-        if cookies_b64:
-            import base64
-            import tempfile
-            fd, cookies_file = tempfile.mkstemp(suffix=".txt")
-            with os.fdopen(fd, 'w') as f:
-                f.write(base64.b64decode(cookies_b64).decode('utf-8'))
+
+        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", video_url)
+        video_id = match.group(1) if match else video_url
+        url = f"https://www.youtube.com/watch?v={video_id}"
 
         ydl_opts = {
             'skip_download': True,
@@ -45,83 +37,57 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             'format': 'worst*',
             'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
         }
-        
-        if cookies_file:
-            ydl_opts['cookiefile'] = cookies_file
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(video_url, download=False)
-                
-                duration = info.get('duration', 0)
-                if duration > 1800:
-                    return f"Error: The video is longer than 30 minutes ({int(duration/60)} mins). Rejecting the request."
+        proxy = os.getenv("YOUTUBE_PROXY")
+        if proxy:
+            ydl_opts['proxy'] = proxy
 
-                subs = info.get('subtitles', {})
-                auto_subs = info.get('automatic_captions', {})
-                
-                sub_entry = None
-                sub_ext = None
-                preferred_exts = ['json3', 'vtt', 'srv1']
-                
-                for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
-                    for source in [subs, auto_subs]:
-                        if lang in source:
-                            for ext in preferred_exts:
-                                for fmt in source[lang]:
-                                    if fmt.get('ext') == ext:
-                                        sub_entry = fmt
-                                        sub_ext = ext
-                                        break
-                                if sub_entry:
-                                    break
-                        if sub_entry:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+            duration = info.get('duration', 0)
+            if duration > 1800:
+                return f"Error: The video is longer than 30 minutes ({int(duration/60)} mins). Rejecting the request."
+
+            subs = info.get('subtitles', {})
+            auto_subs = info.get('automatic_captions', {})
+
+            sub_url = None
+            for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
+                for source in [subs, auto_subs]:
+                    if lang in source:
+                        for fmt in source[lang]:
+                            if fmt.get('ext') == 'json3':
+                                sub_url = fmt['url']
+                                break
+                        if sub_url:
                             break
-                    if sub_entry:
-                        break
+                if sub_url:
+                    break
 
-                if not sub_entry:
-                    return "Error: No English transcript found for this video."
+            if not sub_url:
+                return "Error: No English transcript found for this video."
 
-                import requests as req
-                resp = req.get(sub_entry['url'])
+            resp = requests.get(sub_url)
+            caption_json = resp.json()
 
-                formatted_transcript = []
-                
-                if sub_ext == 'json3':
-                    caption_json = resp.json()
-                    for event in caption_json.get('events', []):
-                        start_ms = event.get('tStartMs', 0)
-                        segs = event.get('segs', [])
-                        if not segs:
-                            continue
-                        text = ''.join(s.get('utf8', '') for s in segs).strip()
-                        if not text:
-                            continue
-                        minutes = int((start_ms / 1000) // 60)
-                        seconds = int((start_ms / 1000) % 60)
-                        timestamp = f"[{minutes:02d}:{seconds:02d}]"
-                        formatted_transcript.append(f"{timestamp} {text}")
-                else:
-                    import re as re_mod
-                    vtt_text = resp.text
-                    pattern = r'(\d{2}):(\d{2}):(\d{2})\.\d+\s*-->\s*\d{2}:\d{2}:\d{2}\.\d+\n(.+?)(?:\n\n|\Z)'
-                    matches = re_mod.findall(pattern, vtt_text, re_mod.DOTALL)
-                    for h, m, s, text in matches:
-                        text = re_mod.sub(r'<[^>]+>', '', text).strip()
-                        if not text:
-                            continue
-                        total_min = int(h) * 60 + int(m)
-                        timestamp = f"[{total_min:02d}:{int(s):02d}]"
-                        formatted_transcript.append(f"{timestamp} {text}")
+            formatted = []
+            for event in caption_json.get('events', []):
+                start_ms = event.get('tStartMs', 0)
+                segs = event.get('segs', [])
+                if not segs:
+                    continue
+                text = ''.join(s.get('utf8', '') for s in segs).strip()
+                if not text:
+                    continue
+                mins = int((start_ms / 1000) // 60)
+                secs = int((start_ms / 1000) % 60)
+                formatted.append(f"[{mins:02d}:{secs:02d}] {text}")
 
-                if not formatted_transcript:
-                    return "Error: Transcript was empty."
+            if not formatted:
+                return "Error: Transcript was empty."
 
-                return "\n".join(formatted_transcript)
-        finally:
-            if cookies_file and os.path.exists(cookies_file):
-                os.remove(cookies_file)
+            return "\n".join(formatted)
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
 
@@ -135,17 +101,12 @@ def search_concept_diagram(query: str) -> str:
     try:
         response = client.search(query, search_depth="basic", include_images=True)
         if "images" in response and len(response["images"]) > 0:
-            # Return the first image URL
             return response["images"][0]
         return "No images found for this concept."
     except Exception as e:
         return f"Error searching for image: {e}"
 
-llm = ChatGroq(
-    model="openai/gpt-oss-120b",
-)
-
-# 1. Initialize memory
+llm = ChatGroq(model="openai/gpt-oss-120b")
 memory = MemorySaver()
 
 SYSTEM_PROMPT = """You are an expert Computer Science tutor extracting core concepts from video transcripts into ultra-concise, Telegram-ready notes.
@@ -179,7 +140,7 @@ agent = create_agent(
     model=llm,
     tools=[fetch_youtube_subtitles, search_concept_diagram],
     system_prompt=SYSTEM_PROMPT,
-    checkpointer=memory, 
+    checkpointer=memory,
 )
 
 def process_video(youtube_url: str, session_id: str = "notebot_conversation_1") -> str:
@@ -196,15 +157,15 @@ def process_video(youtube_url: str, session_id: str = "notebot_conversation_1") 
 
 if __name__ == "__main__":
     import sys
-    
+
     if len(sys.argv) < 2:
         print("Usage: uv run src/agent/agent.py <youtube_url>")
         sys.exit(1)
-        
+
     youtube_url = sys.argv[1]
     print(f"\n--- NoteBot: Processing Video ---")
     print(f"URL: {youtube_url}\n")
-    
+
     notes = process_video(youtube_url)
     print("--- Notes Generated ---\n")
     print(notes)
