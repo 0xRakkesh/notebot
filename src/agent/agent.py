@@ -213,7 +213,7 @@ RULES:
    <b>Architecture & Flow:</b>
    [If a diagram URL was provided for this concept in the 'Available Diagrams', output it EXACTLY like this: [IMAGE]url_from_tool[/IMAGE]. Otherwise describe the flow concisely.]
    
-   <b>Code / Math:</b>
+   <b>Code / Math:</b> (ONLY IF APPLICABLE, otherwise completely omit this section and do not output empty <pre> tags)
    <pre>
    [If the video shows code or formulas, provide the EXACT code/formula here. Do NOT include any code comments (no //, #, or /*).]
    </pre>
