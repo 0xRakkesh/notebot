@@ -2,17 +2,15 @@ import os
 import re
 import sys
 import io
-import requests
+import json
 from tavily import TavilyClient
 
-# Force UTF-8 for Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langchain.agents import create_agent
-from youtube_transcript_api import YouTubeTranscriptApi
 
 load_dotenv()
 
@@ -22,15 +20,10 @@ os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 def fetch_youtube_subtitles(video_url: str) -> str:
     """
     Fetches the subtitles/transcript for a given YouTube video URL.
-    Returns the transcript formatted for AI notes, or an error if the video is longer than 20 minutes.
+    Returns the transcript formatted for AI notes, or an error if the video is longer than 30 minutes.
     """
     try:
-        # Extract video ID from URL
-        match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", video_url)
-        video_id = match.group(1) if match else video_url
-        
-        proxy = os.getenv("YOUTUBE_PROXY")
-        proxies = {"http": proxy, "https": proxy} if proxy else None
+        import yt_dlp
         
         cookies_file = None
         cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
@@ -40,58 +33,81 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             fd, cookies_file = tempfile.mkstemp(suffix=".txt")
             with os.fdopen(fd, 'w') as f:
                 f.write(base64.b64decode(cookies_b64).decode('utf-8'))
-                
+
+        ydl_opts = {
+            'skip_download': True,
+            'writesubtitles': True,
+            'writeautomaticsub': True,
+            'subtitleslangs': ['en'],
+            'subtitlesformat': 'json3',
+            'quiet': True,
+            'no_warnings': True,
+        }
+        
+        if cookies_file:
+            ydl_opts['cookiefile'] = cookies_file
+
         try:
-            import requests
-            session = requests.Session()
-            if proxies:
-                session.proxies = proxies
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=False)
                 
-            if cookies_file:
-                import http.cookiejar
-                cj = http.cookiejar.MozillaCookieJar(cookies_file)
-                cj.load(ignore_discard=True, ignore_expires=True)
-                session.cookies = cj
+                duration = info.get('duration', 0)
+                if duration > 1800:
+                    return f"Error: The video is longer than 30 minutes ({int(duration/60)} mins). Rejecting the request."
+
+                subs = info.get('subtitles', {})
+                auto_subs = info.get('automatic_captions', {})
                 
-            api = YouTubeTranscriptApi(http_client=session)
-            transcript_list = api.list(video_id)
-        except Exception as e:
+                sub_data = None
+                for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
+                    if lang in subs:
+                        for fmt in subs[lang]:
+                            if fmt.get('ext') == 'json3':
+                                sub_data = fmt
+                                break
+                        if sub_data:
+                            break
+                
+                if not sub_data:
+                    for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
+                        if lang in auto_subs:
+                            for fmt in auto_subs[lang]:
+                                if fmt.get('ext') == 'json3':
+                                    sub_data = fmt
+                                    break
+                            if sub_data:
+                                break
+
+                if not sub_data:
+                    return "Error: No English transcript found for this video."
+
+                import requests as req
+                resp = req.get(sub_data['url'])
+                caption_json = resp.json()
+
+                formatted_transcript = []
+                for event in caption_json.get('events', []):
+                    start_ms = event.get('tStartMs', 0)
+                    segs = event.get('segs', [])
+                    if not segs:
+                        continue
+                    text = ''.join(s.get('utf8', '') for s in segs).strip()
+                    if not text:
+                        continue
+                    minutes = int((start_ms / 1000) // 60)
+                    seconds = int((start_ms / 1000) % 60)
+                    timestamp = f"[{minutes:02d}:{seconds:02d}]"
+                    formatted_transcript.append(f"{timestamp} {text}")
+
+                if not formatted_transcript:
+                    return "Error: Transcript was empty."
+
+                return "\n".join(formatted_transcript)
+        finally:
             if cookies_file and os.path.exists(cookies_file):
                 os.remove(cookies_file)
-            return f"Error listing transcripts: {str(e)}"
-        
-        try:
-            # Try to find an English transcript first
-            transcript_obj = transcript_list.find_transcript(['en', 'en-US', 'en-GB', 'en-CA', 'en-AU', 'en-IN'])
-        except Exception:
-            # Fallback to the first available transcript (any language)
-            transcript_obj = list(transcript_list)[0]
-            
-        transcript = transcript_obj.fetch()
-        
-        if not transcript:
-            return "Error: No transcript found for this video."
-            
-        # Check total duration (approximate using the last item)
-        last_item = transcript[-1]
-        total_duration_seconds = last_item.start + last_item.duration
-        
-        if total_duration_seconds > 1800: # 30 minutes * 60 seconds
-            return f"Error: The video is longer than 30 minutes ({int(total_duration_seconds/60)} mins). Rejecting the request."
-            
-        formatted_transcript = []
-        for entry in transcript:
-            minutes = int(entry.start // 60)
-            seconds = int(entry.start % 60)
-            timestamp = f"[{minutes:02d}:{seconds:02d}]"
-            formatted_transcript.append(f"{timestamp} {entry.text}")
-            
-        return "\n".join(formatted_transcript)
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
-    finally:
-        if 'cookies_file' in locals() and cookies_file and os.path.exists(cookies_file):
-            os.remove(cookies_file)
 
 @tool
 def search_concept_diagram(query: str) -> str:
