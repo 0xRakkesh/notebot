@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import io
+import requests
 from tavily import TavilyClient
 
 # Force UTF-8 for Windows console
@@ -28,8 +29,28 @@ def fetch_youtube_subtitles(video_url: str) -> str:
         match = re.search(r"(?:v=|\/)([0-9A-Za-z_-]{11}).*", video_url)
         video_id = match.group(1) if match else video_url
         
-        api = YouTubeTranscriptApi()
-        transcript_list = api.list(video_id)
+        proxy = os.getenv("YOUTUBE_PROXY")
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        
+        cookies_file = None
+        cookies_b64 = os.getenv("YOUTUBE_COOKIES_B64")
+        if cookies_b64:
+            import base64
+            import tempfile
+            fd, cookies_file = tempfile.mkstemp(suffix=".txt")
+            with os.fdopen(fd, 'w') as f:
+                f.write(base64.b64decode(cookies_b64).decode('utf-8'))
+                
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(
+                video_id, 
+                proxies=proxies, 
+                cookies=cookies_file
+            )
+        except Exception as e:
+            if cookies_file and os.path.exists(cookies_file):
+                os.remove(cookies_file)
+            return f"Error listing transcripts: {str(e)}"
         
         try:
             # Try to find an English transcript first
@@ -60,6 +81,9 @@ def fetch_youtube_subtitles(video_url: str) -> str:
         return "\n".join(formatted_transcript)
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
+    finally:
+        if 'cookies_file' in locals() and cookies_file and os.path.exists(cookies_file):
+            os.remove(cookies_file)
 
 @tool
 def search_concept_diagram(query: str) -> str:
