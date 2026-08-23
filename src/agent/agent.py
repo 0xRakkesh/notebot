@@ -42,11 +42,19 @@ def fetch_youtube_subtitles(video_url: str) -> str:
                 f.write(base64.b64decode(cookies_b64).decode('utf-8'))
                 
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(
-                video_id, 
-                proxies=proxies, 
-                cookies=cookies_file
-            )
+            import requests
+            session = requests.Session()
+            if proxies:
+                session.proxies = proxies
+                
+            if cookies_file:
+                import http.cookiejar
+                cj = http.cookiejar.MozillaCookieJar(cookies_file)
+                cj.load(ignore_discard=True, ignore_expires=True)
+                session.cookies = cj
+                
+            api = YouTubeTranscriptApi(http_client=session)
+            transcript_list = api.list(video_id)
         except Exception as e:
             if cookies_file and os.path.exists(cookies_file):
                 os.remove(cookies_file)
