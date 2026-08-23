@@ -39,7 +39,6 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             'writesubtitles': True,
             'writeautomaticsub': True,
             'subtitleslangs': ['en'],
-            'subtitlesformat': 'json3',
             'quiet': True,
             'no_warnings': True,
             'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
@@ -59,46 +58,60 @@ def fetch_youtube_subtitles(video_url: str) -> str:
                 subs = info.get('subtitles', {})
                 auto_subs = info.get('automatic_captions', {})
                 
-                sub_data = None
-                for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
-                    if lang in subs:
-                        for fmt in subs[lang]:
-                            if fmt.get('ext') == 'json3':
-                                sub_data = fmt
-                                break
-                        if sub_data:
-                            break
+                sub_entry = None
+                sub_ext = None
+                preferred_exts = ['json3', 'vtt', 'srv1']
                 
-                if not sub_data:
-                    for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
-                        if lang in auto_subs:
-                            for fmt in auto_subs[lang]:
-                                if fmt.get('ext') == 'json3':
-                                    sub_data = fmt
+                for lang in ['en', 'en-US', 'en-GB', 'en-IN']:
+                    for source in [subs, auto_subs]:
+                        if lang in source:
+                            for ext in preferred_exts:
+                                for fmt in source[lang]:
+                                    if fmt.get('ext') == ext:
+                                        sub_entry = fmt
+                                        sub_ext = ext
+                                        break
+                                if sub_entry:
                                     break
-                            if sub_data:
-                                break
+                        if sub_entry:
+                            break
+                    if sub_entry:
+                        break
 
-                if not sub_data:
+                if not sub_entry:
                     return "Error: No English transcript found for this video."
 
                 import requests as req
-                resp = req.get(sub_data['url'])
-                caption_json = resp.json()
+                resp = req.get(sub_entry['url'])
 
                 formatted_transcript = []
-                for event in caption_json.get('events', []):
-                    start_ms = event.get('tStartMs', 0)
-                    segs = event.get('segs', [])
-                    if not segs:
-                        continue
-                    text = ''.join(s.get('utf8', '') for s in segs).strip()
-                    if not text:
-                        continue
-                    minutes = int((start_ms / 1000) // 60)
-                    seconds = int((start_ms / 1000) % 60)
-                    timestamp = f"[{minutes:02d}:{seconds:02d}]"
-                    formatted_transcript.append(f"{timestamp} {text}")
+                
+                if sub_ext == 'json3':
+                    caption_json = resp.json()
+                    for event in caption_json.get('events', []):
+                        start_ms = event.get('tStartMs', 0)
+                        segs = event.get('segs', [])
+                        if not segs:
+                            continue
+                        text = ''.join(s.get('utf8', '') for s in segs).strip()
+                        if not text:
+                            continue
+                        minutes = int((start_ms / 1000) // 60)
+                        seconds = int((start_ms / 1000) % 60)
+                        timestamp = f"[{minutes:02d}:{seconds:02d}]"
+                        formatted_transcript.append(f"{timestamp} {text}")
+                else:
+                    import re as re_mod
+                    vtt_text = resp.text
+                    pattern = r'(\d{2}):(\d{2}):(\d{2})\.\d+\s*-->\s*\d{2}:\d{2}:\d{2}\.\d+\n(.+?)(?:\n\n|\Z)'
+                    matches = re_mod.findall(pattern, vtt_text, re_mod.DOTALL)
+                    for h, m, s, text in matches:
+                        text = re_mod.sub(r'<[^>]+>', '', text).strip()
+                        if not text:
+                            continue
+                        total_min = int(h) * 60 + int(m)
+                        timestamp = f"[{total_min:02d}:{int(s):02d}]"
+                        formatted_transcript.append(f"{timestamp} {text}")
 
                 if not formatted_transcript:
                     return "Error: Transcript was empty."
