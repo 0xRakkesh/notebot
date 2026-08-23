@@ -17,6 +17,7 @@ dependencies = [
     "python-telegram-bot>=22.8",
     "tavily-python>=0.7.27",
     "uvicorn>=0.52.4",
+    "youtube-transcript-api>=1.2.4",
     "yt-dlp>=2026.8.19",
 ]
 
