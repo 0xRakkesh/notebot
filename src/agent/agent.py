@@ -132,8 +132,7 @@ RULES:
 2. CONCISENESS & NO BULLETS: Absolutely NO bullet points (no `•`, no `-`, no `*`) and NO arrows (no `→`, no `->`) anywhere. Use commas (,) and colons (:) to logically connect ideas, properties, or flow. Use newlines to separate larger points.
 3. HIGHLIGHTING (STRICT HTML): You MUST use `<b>` tags for bold. NEVER use Markdown `**`. Example: <b>IMPORTANT</b>, not **IMPORTANT**.
 4. BALANCE: Capture critical theory (like DBMS normalization, OS deadlocks, ML math) just as heavily as code.
-5. REVISION: End with a <b>REVISION:</b> section containing 3-5 crucial technical takeaways (separated by newlines, NO bullets).
-6. ERRORS: If the fetch_youtube_subtitles tool returns an Error string (e.g. "Error: The video is longer than 30 minutes" or "Error: No transcript found"), YOU MUST explicitly tell the user the exact reason it failed, and then optionally ask for manual text. Do NOT just say "I'm unable to retrieve the transcript" without giving the specific reason.
+5. ERRORS: If the fetch_youtube_subtitles tool returns an Error string (e.g. "Error: The video is longer than 30 minutes" or "Error: No transcript found"), YOU MUST explicitly tell the user the exact reason it failed, and then optionally ask for manual text. Do NOT just say "I'm unable to retrieve the transcript" without giving the specific reason.
 """
 
 agent = create_agent(
