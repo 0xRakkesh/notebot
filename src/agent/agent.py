@@ -42,6 +42,7 @@ def fetch_youtube_subtitles(video_url: str) -> str:
             'subtitlesformat': 'json3',
             'quiet': True,
             'no_warnings': True,
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web']}},
         }
         
         if cookies_file:
