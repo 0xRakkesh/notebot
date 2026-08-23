@@ -79,8 +79,8 @@ def fetch_youtube_subtitles_raw(video_url: str) -> str:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             duration = info.get('duration', 0)
-            if duration > 1800:
-                return f"Error: The video is longer than 30 minutes ({int(duration/60)} mins). Rejecting the request."
+            if duration > 3600:
+                return f"Error: The video is longer than 1 hour ({int(duration/60)} mins). Rejecting the request."
 
             subs = info.get('subtitles', {})
             auto_subs = info.get('automatic_captions', {})
@@ -121,7 +121,7 @@ def fetch_youtube_subtitles_raw(video_url: str) -> str:
                 return "Error: Transcript was empty."
 
             transcript_text = "\n".join(formatted)
-            MAX_CHARS = 20000 
+            MAX_CHARS = 50000 
             if len(transcript_text) > MAX_CHARS:
                 transcript_text = transcript_text[:MAX_CHARS] + "\n\n...[Transcript truncated due to length limits]..."
                 
@@ -143,12 +143,15 @@ def node_extract_concepts(state: AgentState) -> dict:
     if state.get("error"): return {}
     
     print("-> Extracting key concepts...")
+    # Truncate transcript to first 12,000 characters for concept extraction to save tokens
+    extraction_transcript = state['transcript'][:12000]
+    
     prompt = f"""Analyze the following video transcript. Identify the 1 to 3 MOST IMPORTANT highly-technical concepts, frameworks, or architectures discussed that would benefit from having a diagram or flowchart.
     
     Output ONLY a comma-separated list of these 1-3 concepts. Do not output anything else.
     
     Transcript:
-    {state['transcript']}
+    {extraction_transcript}
     """
     
     try:
@@ -224,19 +227,39 @@ RULES:
 5. REVISION: End with a <b>REVISION:</b> section containing 3-5 crucial technical takeaways (separated by newlines, NO bullets).
 """
 
-    human_prompt = f"""
-    {diagrams_context}
+    chunk_size = 12000
+    transcript = state['transcript']
+    chunks = [transcript[i:i+chunk_size] for i in range(0, len(transcript), chunk_size)]
     
-    Transcript:
-    {state['transcript']}
-    """
+    final_notes_pieces = []
     
     try:
-        response = llm.invoke([
-            SystemMessage(content=sys_prompt),
-            HumanMessage(content=human_prompt)
-        ])
-        return {"final_notes": response.content}
+        for i, chunk in enumerate(chunks):
+            print(f"   Processing chunk {i+1}/{len(chunks)}...")
+            
+            # Remove REVISION section requirement for intermediate chunks to prevent duplicates
+            chunk_sys_prompt = sys_prompt
+            if len(chunks) > 1 and i < len(chunks) - 1:
+                chunk_sys_prompt = sys_prompt.replace(
+                    "5. REVISION: End with a <b>REVISION:</b> section containing 3-5 crucial technical takeaways (separated by newlines, NO bullets).",
+                    "5. Do NOT output a REVISION section for this chunk."
+                )
+                
+            human_prompt = f"{diagrams_context}\n\nTranscript (Part {i+1}/{len(chunks)}):\n{chunk}"
+            
+            response = llm.invoke([
+                SystemMessage(content=chunk_sys_prompt),
+                HumanMessage(content=human_prompt)
+            ])
+            
+            final_notes_pieces.append(response.content)
+            
+            # Wait for TPM limit to reset before processing next chunk
+            if i < len(chunks) - 1:
+                print("   [Sleeping 60s for TPM limit reset...]")
+                time.sleep(60)
+                
+        return {"final_notes": "\n\n---\n\n".join(final_notes_pieces)}
     except Exception as e:
         return {"error": f"Error generating notes: {e}"}
 

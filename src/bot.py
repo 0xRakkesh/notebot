@@ -17,13 +17,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     welcome_message = (
         "Hiiiii! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧ I'm Marin Kitagawa, your absolute favorite CS nerd and parallel-universe class topper!\n\n"
         "Just drop a YouTube link (like https://youtu.be/...) here, and I'll whip up the most *perfect*, ultra-dense, completely awesome cheat sheet notes for you!\n\n"
-        "Just a heads up though, try to keep the videos under 30 minutes so we don't totally crash the system, okay? Let's get studying!"
+        "Just a heads up though, try to keep the videos under 1 hour so we don't totally crash the system, okay? Let's get studying!"
     )
     await update.message.reply_text(welcome_message)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming messages and process YouTube URLs."""
     text = update.message.text
+    import telegram.error
     
     # Simple check for youtube links
     if "youtube.com" not in text and "youtu.be" not in text:
@@ -31,7 +32,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
         
     # Acknowledge receipt
-    processing_msg = await update.message.reply_text("This might take a minute ⏳")
+    processing_msg = await update.message.reply_text("This might take a few minutes for longer videos! ⏳")
     
     try:
         # Use a unique session ID per user chat
@@ -57,12 +58,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                     await update.message.reply_text(f"<i>(Failed to load diagram: {segment})</i>", parse_mode="HTML")
             else:
                 # This is a text block
-                await update.message.reply_text(segment, parse_mode="HTML")
+                try:
+                    await update.message.reply_text(segment, parse_mode="HTML")
+                except telegram.error.BadRequest as e:
+                    if "Can't parse entities" in str(e):
+                        # Fallback to sending raw text if HTML is malformed
+                        print(f"HTML Parse error caught: {e}. Falling back to raw text.")
+                        await update.message.reply_text(
+                            "Here is a section of notes (HTML formatting disabled due to parse error):\n\n" + segment
+                        )
+                    else:
+                        raise e
     except Exception as e:
         await update.message.reply_text(f"Sorry, an error occurred while generating notes:\n{e}")
     finally:
         # Edit the processing message to show it's done
-        await processing_msg.edit_text("✅ Processing complete!")
+        await processing_msg.edit_text("✨ Processing complete!")
 
 app = FastAPI()
 
