@@ -22,6 +22,7 @@ load_dotenv()
 # ==========================================
 class AgentState(TypedDict):
     youtube_url: str
+    file_path: str
     transcript: str
     error: str
     key_concepts: List[str]
@@ -147,15 +148,101 @@ def fetch_youtube_subtitles_raw(video_url: str) -> str:
     except Exception as e:
         return f"Error fetching transcript: {str(e)}"
 
+def extract_pdf_text(file_path: str) -> str:
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(file_path)
+        text = []
+        for page in reader.pages:
+            t = page.extract_text()
+            if t:
+                text.append(t)
+        return "\n".join(text)
+    except Exception as e:
+        return f"Error: Failed to parse PDF - {e}"
+
+def extract_pptx_text(file_path: str) -> str:
+    try:
+        from pptx import Presentation
+        prs = Presentation(file_path)
+        text = []
+        for slide in prs.slides:
+            slide_text = []
+            for shape in slide.shapes:
+                if hasattr(shape, "text"):
+                    slide_text.append(shape.text)
+            text.append("\n".join(slide_text))
+        return "\n\n".join(text)
+    except Exception as e:
+        return f"Error: Failed to parse PPTX - {e}"
+
 # ==========================================
 # 3. Graph Nodes
 # ==========================================
-def node_fetch_transcript(state: AgentState) -> dict:
-    print("-> Fetching transcript...")
-    transcript = fetch_youtube_subtitles_raw(state["youtube_url"])
-    if transcript.startswith("Error:"):
-        return {"error": transcript}
-    return {"transcript": transcript, "error": ""}
+def node_fetch_content(state: AgentState) -> dict:
+    if state.get("file_path"):
+        print(f"-> Extracting document: {state['file_path']}")
+        file_path = state["file_path"]
+        if file_path.lower().endswith('.pdf'):
+            content = extract_pdf_text(file_path)
+        elif file_path.lower().endswith(('.pptx', '.ppt')):
+            content = extract_pptx_text(file_path)
+        else:
+            return {"error": "Error: Unsupported file format."}
+            
+        if content.startswith("Error:"):
+            return {"error": content}
+        
+        # Limit content size 
+        if len(content) > 120000:
+            content = content[:120000] + "\n\n...[Truncated due to limits]..."
+            
+        return {"transcript": content, "error": ""}
+    elif state.get("youtube_url"):
+        print("-> Fetching transcript...")
+        transcript = fetch_youtube_subtitles_raw(state["youtube_url"])
+        if transcript.startswith("Error:"):
+            return {"error": transcript}
+        return {"transcript": transcript, "error": ""}
+    else:
+        return {"error": "Error: No input provided."}
+
+def node_research_expansion(state: AgentState) -> dict:
+    if state.get("error"): return {}
+    
+    transcript = state.get("transcript", "")
+    
+    # Expand if it's a short document
+    if state.get("file_path") and len(transcript) < 3000 and len(transcript) > 50:
+        print("-> Document is very brief. Expanding via research...")
+        
+        prompt = f"""The following is text extracted from a short presentation or document. It likely contains high-level topics or bullet points. 
+Generate exactly ONE comprehensive web search query that would yield detailed educational information about the core topics mentioned here. 
+Return ONLY the search query.
+Document: {transcript}"""
+        
+        try:
+            wait_for_rate_limit()
+            response = llm.invoke([HumanMessage(content=prompt)])
+            query = response.content.strip().strip('"\'')
+            print(f"   Generated search query: {query}")
+            
+            tavily_api_key = os.getenv("TAVILY_API_KEY")
+            if tavily_api_key:
+                client = TavilyClient(api_key=tavily_api_key)
+                search_response = client.search(query, search_depth="advanced", max_results=2)
+                
+                research_text = "Additional Research Context:\n"
+                for result in search_response.get("results", []):
+                    research_text += f"{result.get('content', '')}\n\n"
+                    
+                print("   Appended research context to the document text.")
+                return {"transcript": transcript + "\n\n" + research_text}
+                
+        except Exception as e:
+            print(f"   Research failed: {e}")
+            
+    return {}
 
 def node_extract_concepts(state: AgentState) -> dict:
     if state.get("error"): return {}
@@ -279,13 +366,15 @@ RULES:
 # ==========================================
 workflow = StateGraph(AgentState)
 
-workflow.add_node("fetch", node_fetch_transcript)
+workflow.add_node("fetch", node_fetch_content)
+workflow.add_node("research", node_research_expansion)
 workflow.add_node("extract", node_extract_concepts)
 workflow.add_node("diagrams", node_fetch_diagrams)
 workflow.add_node("generate", node_generate_notes)
 
 workflow.add_edge(START, "fetch")
-workflow.add_edge("fetch", "extract")
+workflow.add_edge("fetch", "research")
+workflow.add_edge("research", "extract")
 workflow.add_edge("extract", "diagrams")
 workflow.add_edge("diagrams", "generate")
 workflow.add_edge("generate", END)
@@ -302,6 +391,7 @@ def process_video(youtube_url: str, session_id: str = "notebot_conversation_1") 
     # Initialize the state
     inputs = {
         "youtube_url": youtube_url,
+        "file_path": "",
         "transcript": "",
         "error": "",
         "key_concepts": [],
@@ -317,6 +407,29 @@ def process_video(youtube_url: str, session_id: str = "notebot_conversation_1") 
         return result.get("final_notes", "Error: No notes generated.")
     except Exception as e:
         return f"Error processing video: {e}"
+
+def process_document(file_path: str, session_id: str = "notebot_conversation_1") -> str:
+    """Processes a document (PDF/PPTX) through the advanced graph and returns the generated notes."""
+    config = {"configurable": {"thread_id": session_id}}
+    
+    inputs = {
+        "youtube_url": "",
+        "file_path": file_path,
+        "transcript": "",
+        "error": "",
+        "key_concepts": [],
+        "diagrams": {},
+        "final_notes": ""
+    }
+    
+    try:
+        result = advanced_agent.invoke(inputs, config=config)
+        if result.get("error"):
+            return result["error"]
+        
+        return result.get("final_notes", "Error: No notes generated.")
+    except Exception as e:
+        return f"Error processing document: {e}"
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:

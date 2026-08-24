@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from agent.agent import process_video
+from agent.agent import process_video, process_document
 
 # Load environment variables
 load_dotenv()
@@ -77,6 +77,72 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Edit the processing message to show it's done
         await processing_msg.edit_text("✨ Processing complete!")
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle incoming documents (PDF, PPT)."""
+    document = update.message.document
+    if not document:
+        return
+        
+    file_name = document.file_name.lower() if document.file_name else ""
+    if not (file_name.endswith('.pdf') or file_name.endswith('.ppt') or file_name.endswith('.pptx')):
+        await update.message.reply_text("Please send a valid PDF or PowerPoint (.pptx) file.")
+        return
+        
+    processing_msg = await update.message.reply_text("Downloading and processing your document... This might take a minute! ⏳")
+    
+    try:
+        # Download the file
+        file = await context.bot.get_file(document.file_id)
+        
+        # Create a temporary file path
+        temp_file_path = f"temp_{document.file_id}_{file_name}"
+        await file.download_to_drive(temp_file_path)
+        
+        # Use a unique session ID per user chat
+        session_id = f"notebot_user_{update.message.chat_id}"
+        
+        # Process the document
+        notes = process_document(temp_file_path, session_id=session_id)
+        
+        # Clean up the file
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+            
+        # Parse and send text and image tags
+        import telegram.error
+        segments = re.split(r'\[IMAGE\](.*?)\[\/IMAGE\]', notes, flags=re.DOTALL)
+        
+        for i, segment in enumerate(segments):
+            segment = segment.strip()
+            if not segment:
+                continue
+                
+            if i % 2 == 1:
+                # This is an image URL
+                try:
+                    await update.message.reply_photo(photo=segment)
+                except Exception as img_e:
+                    print(f"Image error: {img_e}")
+                    await update.message.reply_text(f"<i>(Failed to load diagram: {segment})</i>", parse_mode="HTML")
+            else:
+                # This is a text block
+                try:
+                    await update.message.reply_text(segment, parse_mode="HTML")
+                except telegram.error.BadRequest as e:
+                    if "Can't parse entities" in str(e):
+                        # Fallback to sending raw text if HTML is malformed
+                        print(f"HTML Parse error caught: {e}. Falling back to raw text.")
+                        await update.message.reply_text(
+                            "Here is a section of notes (HTML formatting disabled due to parse error):\n\n" + segment
+                        )
+                    else:
+                        raise e
+    except Exception as e:
+        await update.message.reply_text(f"Sorry, an error occurred while generating notes:\n{e}")
+    finally:
+        # Edit the processing message to show it's done
+        await processing_msg.edit_text("✨ Processing complete!")
+
 app = FastAPI()
 
 @app.get("/")
@@ -105,6 +171,9 @@ def main() -> None:
 
     # on non command i.e message - process the link
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Handle document uploads (PDF/PPT)
+    application.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     # Run the bot until the user presses Ctrl-C
     print("Starting NoteBot Telegram Polling...")
