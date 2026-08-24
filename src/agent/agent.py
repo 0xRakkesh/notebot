@@ -8,7 +8,7 @@ from typing import TypedDict, List, Dict
 from tavily import TavilyClient
 
 from dotenv import load_dotenv
-from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -16,7 +16,6 @@ from langgraph.checkpoint.memory import MemorySaver
 # Force UTF-8 for Windows console
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 load_dotenv()
-os.environ["GROQ_API_KEY"] = os.getenv("GROQ_API_KEY")
 
 # ==========================================
 # 1. State Definition
@@ -32,9 +31,28 @@ class AgentState(TypedDict):
 # ==========================================
 # 2. Setup LLMs & Tools
 # ==========================================
-# Using the standard Groq model
-llm = ChatGroq(model="openai/gpt-oss-120b")
+# Using tokenin API
+llm = ChatOpenAI(
+    model="myt/claude-opus-4-8-free",
+    api_key=os.getenv("TOKENIN_API_KEY"),
+    base_url="https://tokenin.my.id/v1"
+)
 memory = MemorySaver()
+
+# Global rate limit state
+last_llm_call = 0.0
+
+def wait_for_rate_limit():
+    global last_llm_call
+    now = time.time()
+    elapsed = now - last_llm_call
+    # We need 60 seconds between calls (for 1 req/min limit), plus 2s buffer
+    if elapsed < 62.0 and last_llm_call != 0.0:
+        wait_time = 62.0 - elapsed
+        print(f"   [Rate Limit] Sleeping for {wait_time:.1f}s to respect API limits...")
+        time.sleep(wait_time)
+    
+    last_llm_call = time.time()
 
 def search_tavily_diagram(query: str) -> str:
     """Helper function to search Tavily for a diagram."""
@@ -121,7 +139,7 @@ def fetch_youtube_subtitles_raw(video_url: str) -> str:
                 return "Error: Transcript was empty."
 
             transcript_text = "\n".join(formatted)
-            MAX_CHARS = 50000 
+            MAX_CHARS = 120000 
             if len(transcript_text) > MAX_CHARS:
                 transcript_text = transcript_text[:MAX_CHARS] + "\n\n...[Transcript truncated due to length limits]..."
                 
@@ -143,8 +161,8 @@ def node_extract_concepts(state: AgentState) -> dict:
     if state.get("error"): return {}
     
     print("-> Extracting key concepts...")
-    # Truncate transcript to first 12,000 characters for concept extraction to save tokens
-    extraction_transcript = state['transcript'][:12000]
+    # Truncate transcript to first 120,000 characters for concept extraction to save tokens
+    extraction_transcript = state['transcript'][:120000]
     
     prompt = f"""Analyze the following video transcript. Identify the 1 to 3 MOST IMPORTANT highly-technical concepts, frameworks, or architectures discussed that would benefit from having a diagram or flowchart.
     
@@ -155,6 +173,7 @@ def node_extract_concepts(state: AgentState) -> dict:
     """
     
     try:
+        wait_for_rate_limit()
         response = llm.invoke([HumanMessage(content=prompt)])
         # Clean the output
         content = response.content.strip()
@@ -180,10 +199,6 @@ def node_fetch_diagrams(state: AgentState) -> dict:
         if url and not url.startswith("Error"):
             diagrams[concept] = url
             print(f"   Found diagram for '{concept}': {url}")
-            
-    # Add a mandatory sleep to avoid hitting the Groq RPM/TPM limit between the two heavy LLM passes
-    print("   [Sleeping 10s to reset LLM rate limits...]")
-    time.sleep(10)
             
     return {"diagrams": diagrams}
 
@@ -227,7 +242,7 @@ RULES:
 5. REVISION: End with a <b>REVISION:</b> section containing 3-5 crucial technical takeaways (separated by newlines, NO bullets).
 """
 
-    chunk_size = 12000
+    chunk_size = 120000
     transcript = state['transcript']
     chunks = [transcript[i:i+chunk_size] for i in range(0, len(transcript), chunk_size)]
     
@@ -247,6 +262,7 @@ RULES:
                 
             human_prompt = f"{diagrams_context}\n\nTranscript (Part {i+1}/{len(chunks)}):\n{chunk}"
             
+            wait_for_rate_limit()
             response = llm.invoke([
                 SystemMessage(content=chunk_sys_prompt),
                 HumanMessage(content=human_prompt)
@@ -254,11 +270,6 @@ RULES:
             
             final_notes_pieces.append(response.content)
             
-            # Wait for TPM limit to reset before processing next chunk
-            if i < len(chunks) - 1:
-                print("   [Sleeping 60s for TPM limit reset...]")
-                time.sleep(60)
-                
         return {"final_notes": "\n\n---\n\n".join(final_notes_pieces)}
     except Exception as e:
         return {"error": f"Error generating notes: {e}"}
