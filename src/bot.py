@@ -2,9 +2,11 @@ import os
 import re
 import threading
 import uvicorn
+import time
 from fastapi import FastAPI
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import Conflict
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from agent.agent import process_video
 
@@ -84,7 +86,8 @@ def health_check():
 
 def keep_alive():
     def run():
-        uvicorn.run(app, host="0.0.0.0", port=8080, log_level="warning")
+        port = int(os.getenv("PORT", 8080))
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
     threading.Thread(target=run, daemon=True).start()
 
 def main() -> None:
@@ -108,9 +111,19 @@ def main() -> None:
     
     # Start the keep-alive server for Render + UptimeRobot
     keep_alive()
-    print("Keep-alive server running on port 8080")
+    print(f"Keep-alive server running on port {os.getenv('PORT', 8080)}")
     
-    application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    max_retries = 15
+    for i in range(max_retries):
+        try:
+            application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+            break
+        except Conflict:
+            print(f"Conflict error: Old instance still running. Retrying in 5s... ({i+1}/{max_retries})")
+            time.sleep(5)
+        except Exception as e:
+            print(f"Polling error: {e}")
+            time.sleep(5)
 
 if __name__ == "__main__":
     main()
